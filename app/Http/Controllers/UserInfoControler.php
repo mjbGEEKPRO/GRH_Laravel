@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use App\Models\Permission;
+use App\Models\ProjectTeam;
 use App\Models\Team;
 use App\Models\Role;
 use Illuminate\Http\Request;
@@ -16,10 +17,10 @@ class UserInfoControler extends Controller
         try {
             // Récupérer les utilisateurs avec leurs relations
             $users = User::with(['role','permissions','teams'])->get();
-            $teams = Team::all();
+            $teams = ProjectTeam::all();
             $permissions = Permission::all();
             $postes = Role::all();
-
+            Log::info("teams rcupérer ". $teams);
             return response()->json([
                 'users' => $users,
                 'role' => $postes,

@@ -60,6 +60,18 @@ class VerificatioController extends Controller
             ], 422);
         }
 
+          // Vérification des doublons AVANT tout traitement
+        $duplicateChecks = [
+            'email' => User::where('email', trim($request->email))->first(),
+            'telephone' => User::where('telephone', trim($request->telephone))->first(),
+        ];
+        if ($duplicateChecks['telephone']) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Un compte avec ce numéro de téléphone existe déjà.',
+                'field' => 'telephone'
+            ], 422);
+        }
         return response()->json([
             'success' => true,
             'user' => [

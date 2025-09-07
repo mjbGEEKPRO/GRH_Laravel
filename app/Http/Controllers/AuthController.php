@@ -8,8 +8,7 @@ use App\Models\Departement;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
-
-
+use Illuminate\Support\Facades\DB;
 
 class AuthController extends Controller
 {
@@ -17,7 +16,7 @@ class AuthController extends Controller
     {   
         try {
         $data = $request->all();
-        Log::info("User data received: " . json_encode($data));
+        // Log::info("User data received: " . json_encode($data));
         
         // Validation supplémentaire côté serveur
         if (empty(trim($data['nom'])) || empty(trim($data['prenom']))) {
@@ -34,11 +33,7 @@ class AuthController extends Controller
             'telephone' => User::where('telephone', trim($data['telephone']))->first(),
         ];
         
-        // Vérification par combinaison nom + prénom + date de naissance
-        $personExists = User::where('nom', trim($data['nom']))
-                           ->where('prenom', trim($data['prenom']))
-                           ->where('date_naissance', $data['dateNaissance'])
-                           ->first();
+     
         
         if ($duplicateChecks['email']) {
             return response()->json([
@@ -48,33 +43,19 @@ class AuthController extends Controller
             ], 422);
         }
         
-        if ($duplicateChecks['telephone']) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Un compte avec ce numéro de téléphone existe déjà.',
-                'field' => 'telephone'
-            ], 422);
-        }
         
-        if ($personExists) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Une personne avec ces informations (nom, prénom, date de naissance) existe déjà.',
-                'field' => 'person_identity'
-            ], 422);
-        }
+        
+        
         
         // Récupérer le poste 
         $nomPoste = trim($data['poste']);
-        Log::info('Recherche du poste:', ['nom_poste' => $nomPoste]);
+        // Log::info('Recherche du poste:', ['nom_poste' => $nomPoste]);
         
         $poste = Role::where('nom', $nomPoste)->first();
 
         if (!$poste) {
-            Log::error('Poste non trouvé:', ['poste_recherche' => $nomPoste]);
             
             $postesDisponibles = Role::pluck('nom')->toArray();
-            Log::info('Postes disponibles:', ['postes' => $postesDisponibles]);
             
             return response()->json([
                 'success' => false,
@@ -84,7 +65,6 @@ class AuthController extends Controller
             ], 422);
         }
 
-        Log::info('Poste trouvé:', ['poste_id' => $poste->id, 'poste_nom' => $poste->nom]);
         
         // Préparer les données avec trim pour éviter les espaces
         $userData = [
@@ -98,15 +78,15 @@ class AuthController extends Controller
             'statut' => false // Explicitly set status
         ];
 
-        Log::info('Data to insert final:', [
-                'userData' => $userData,
-                'email check' => [
-                  'value' => $userData['email'],
-                  'isnull' => is_null($userData['email']),
-                  'empty' => empty($userData['email']),
-                ],
+        // Log::info('Data to insert final:', [
+        //         'userData' => $userData,
+        //         'email check' => [
+        //           'value' => $userData['email'],
+        //           'isnull' => is_null($userData['email']),
+        //           'empty' => empty($userData['email']),
+        //         ],
 
-        ]);
+        // ]);
 
         // Créer l'utilisateur
         $user = User::create($userData);
@@ -116,10 +96,10 @@ class AuthController extends Controller
             throw new \Exception("Impossible de créer l'utilisateur");
         }
 
-        Log::info('Utilisateur créé avec succès:', [
-            'user_id' => $user->id,
-            'role_id' => $user->role_id
-        ]);
+        // Log::info('Utilisateur créé avec succès:', [
+        //     'user_id' => $user->id,
+        //     'role_id' => $user->role_id
+        // ]);
 
         // Récupérer le département
         $departement = null;
@@ -127,8 +107,7 @@ class AuthController extends Controller
         
         if ($user->role && $user->role->departement_id) {
             $departement = Departement::find($user->role->departement_id);
-            Log::info('Département trouvé:', ['departement' => $departement->nom ?? 'null']);
-        }
+              }
 
         $response = [
             'success' => true,
@@ -194,6 +173,7 @@ class AuthController extends Controller
     public function approuver(Request $request, $userId)
     {
         try {
+            Log::info("user ". json_encode($request->all()));
             $user = User::find($userId);
             
             if (!$user) {
@@ -202,10 +182,13 @@ class AuthController extends Controller
                     'message' => 'Utilisateur non trouvé'
                 ], 404);
             }
-
-            $statut = $request->input('statut');
+            Log::info("email pro ".$request->input('email_pro'));
+            Log::info("pass pro ".$request->input('password'));
+            $statut  = true;
             $password = $request->input('password');
-            $user->statut = $statut;
+            $email_pro = $request->input('email_pro');
+            $user->statut = $statut ;
+            $user->email_pro = $email_pro;
             $user->password = Hash::make($password);
             $user->save();
             
@@ -237,54 +220,5 @@ class AuthController extends Controller
 
     }
 
-    public function resetpassword(Request $request, $userId)
-    {
-        try {
-            $user = User::find($userId);
-            
-            if (!$user) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Utilisateur non trouvé'
-                ], 404);
-            }
-
-            $password = $request->input('newPassword');
-            $user->password = $password;
-            $user->save();
-            
-            $departement = null;
-            if ($user->poste && $user->poste->departement_id) {
-                $departement = Departement::find($user->poste->departement_id);
-            }
-         
-            return response()->json([
-                'success' => true,
-                'message' => "Mot de passe modifier avec succès !!",
-                'user' => [
-                    'id' => $user->id,
-                    'nom' => $user->nom,
-                    'prenom' => $user->prenom,
-                    'email' => $user->email,
-                    'telephone' => $user->telephone,
-                    'statut' => $user->statut,
-                    'poste' => $user->poste ? $user->poste->nom : null,
-                    'poste_id' => $user->poste_id,
-                    'departement' => $departement ? $departement->nom : null,
-                ]
-            ], 200);
-            
-        } catch (\Exception $e) {
-            Log::error('Erreur approbation:', ['error' => $e->getMessage()]);
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la modification du mot de passe',
-            ], 500);
-        }
-    }
+   
 }
-
-
-
-
-
