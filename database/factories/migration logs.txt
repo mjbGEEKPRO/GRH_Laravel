@@ -1,0 +1,8 @@
+CREATE TABLE login_logs (
+    id BIGINT PRIMARY KEY,
+    user_id BIGINT,
+    status VARCHAR(20), -- 'success', 'failed'
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    created_at TIMESTAMP
+);

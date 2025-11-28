@@ -20,7 +20,9 @@ return new class extends Migration
         $table->string('lieu_naissance');
         $table->string('email_pro')->nullable();
         $table->string('telephone');
+        $table->string('situation_famille')->nullable();
         $table->boolean('statut')->default(false);
+        $table->boolean('compte')->default(false);
         $table->string('password')->nullable();
         $table->foreignId('role_id')
         ->nullable()

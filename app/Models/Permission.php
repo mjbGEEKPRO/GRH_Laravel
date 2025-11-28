@@ -7,11 +7,12 @@ use Illuminate\Database\Eloquent\Model;
 class Permission extends Model
 {
     //origin juste nom
-    protected $fillable = ['name', 'resource', 'display_name'];
+    protected $fillable = ['nom','slug',
+        'description'];
 
     public function users()
     {
-        return $this->belongsToMany(User::class);
+        return $this->belongsToMany(User::class,'permission_user')->withTimestamps();;
     }
 
     // public function teams()

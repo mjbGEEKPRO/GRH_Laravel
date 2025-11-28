@@ -9,11 +9,32 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
     public function inscription(Request $request)
-    {   
+    {   // Validation des données
+        $validation = Validator::make($request->all(), [
+            'email_pro' => [
+                
+                'string',
+                'email',
+                'max:255',
+                'regex:/^[a-z][a-z0-9._-]*@gmail.com$/'
+            ],
+        ]);
+
+        if ($validation->fails()) {
+            Log::info('errors'. $validation->errors());
+            return response()->json([
+                'success' => false,
+                'message' => 'Veuillez vérifier l/email professionnel',
+                'errors' => $validation->errors()
+            ], 422);
+        }
+
+
         try {
         $data = $request->all();
         // Log::info("User data received: " . json_encode($data));
@@ -149,6 +170,7 @@ class AuthController extends Controller
     public function loadposte()
     {   
         try {
+            Log::info("arriver");
             $postes = Role::all();
             Log::info('Postes chargés:', ['count' => $postes->count()]);
            

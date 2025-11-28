@@ -61,7 +61,7 @@ class ProjectController extends Controller
                 'nom' => 'required|string|max:255|unique:projects',
                 'description' => 'nullable|string',
                 'budget' => 'required|numeric|min:0',
-                'date_fin_prevue' => 'required|date|after:today',
+                'date_fin_prevue' => 'required|date',
                 'departements' => 'required|array|min:1'
             ]);
 
@@ -166,7 +166,7 @@ class ProjectController extends Controller
                 
                 return response()->json([
                     'success' => false,
-                    'message' => 'Données de validation invalides',
+                    'message' => 'Veillez vérifier les informations des teams si elle sont correct',
                     'errors' => $validator->errors()
                 ], 422);
             }

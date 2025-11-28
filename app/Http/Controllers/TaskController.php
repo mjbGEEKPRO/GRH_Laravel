@@ -20,7 +20,7 @@ class TaskController extends Controller
    public function userTast()
    {
     $role=Role::whereIn("nom", ["Administrateur","Manager"])->pluck('id');
-    $users=User::whereNotIn('role_id', $role)->get();
+    $users=User::where("statut",true)->whereNotIn('role_id', $role)->get();
     return response()->json([
             'success' => true,
             'users' => $users
@@ -34,38 +34,50 @@ class TaskController extends Controller
             'description' => 'nullable|string',
             'projet_id' => 'nullable|exists:projects,id',
             'assigne_a_user_id' => 'required|exists:users,id',
-            'date_echeance' => 'required|date|after_or_equal:today',
+            'date_echeance' => 'required|date',
             'priorite' => 'required|in:Basse,Normale,Haute'
         ]);
 
         $user = JWTAuth::parseToken()->authenticate();
         $assignedUser = User::find($request->assigne_a_user_id);
         
-        // // Vérifier permission d'assignation
-        // if (!$this->canAssignTask($user, $assignedUser)) {
-        //     return response()->json([
-        //         'success' => false,
-        //         'message' => 'Permission refusée'
-        //     ], 403);
-        // }
-        Log::info("id projet ". $request->projet_id);
-        Task::create([
+        $task = Task::create([
             ...$request->only(['titre', 'description', 'projet_id', 'assigne_a_user_id', 'date_echeance', 'priorite']),
             'created_by' => $user->id
         ]);
-        $newdata=Task::with(['project', 'assignedUser', 'creator'])->get();
-        Log::info("task retourner apres creation ". $newdata);
+
+        // Charger les relations pour l'email
+        $task->load(['project', 'assignedUser', 'creator']);
+        $newdata = Task::with(['project', 'assignedUser', 'creator'])->get();
+        
         return response()->json([
             'success' => true,
-            'message' =>"Tache créer avec success !",
-            'tasks' =>$newdata
+            'message' => "Tâche créée avec succès !",
+            'tasks' => $newdata,
+            // Données pour l'email
+            'email_data' => [
+                'assigned_user' => [
+                    'email' => $assignedUser->email_personnel ?? $assignedUser->email,
+                    'nom' => $assignedUser->prenom . ' ' . $assignedUser->nom
+                ],
+                'task' => [
+                    'titre' => $task->titre,
+                    'description' => $task->description,
+                    'priorite' => $task->priorite,
+                    'date_echeance' => $task->date_echeance
+                ],
+                'creator' => $user->prenom . ' ' . $user->nom,
+                'project' => $task->project ? ['nom' => $task->project->nom] : null
+            ]
         ], 201);
      }catch (\Exception $e) {
         Log::error('Erreur lors de la creation de la tache:', [
-            'message' => $e->getMessage(),
+            'message' => "Erreur lors de la creation de la tâche ",
             'file' => $e->getFile(),
             'line' => $e->getLine(),
-            'data' => $request->all() 
+            'data' => $request->all() ,
+            'errors' => $e->getMessage()
+
         ]);
         
         return response()->json([

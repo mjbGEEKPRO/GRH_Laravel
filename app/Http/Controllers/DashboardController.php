@@ -51,11 +51,15 @@ class DashboardController extends Controller
 
     public function getAdminData()
     {
+        $query = Project::with(['creator', 'tasks', 'teams']);
+        $projects = $query->latest()->get();
+        $departement = Departement::whereNotIn("nom", ["Administration"])->get();
+        
         $data = [
-            'projets' => Project::with(['tasks', 'creator'])->get(),
             'task' => Task::with(['project', 'assignedUser', 'creator'])->get(),
-            'user' => User::where('statut', true)->get(),
-            
+            'user' => User::where('statut', true)->get(),            
+            'projects' => $projects,            
+            'departements' => $departement,            
         ];
         Log::info("task satut ".  $data['task'] );
         return response()->json([
@@ -132,74 +136,73 @@ public function getMyProjectsOnly()
 
 
 
- public function getConnectionHistory(Request $request)
+public function getConnectionHistory(Request $request)
 {
-    // Vérifier que l'utilisateur est admin
     $user = JWTAuth::parseToken()->authenticate();
+    $user->role->departement_id;
+    Log::info("user ". $user->role);
     
-    Log::info("user ". $user);
-    if ($user->role && $user->role->departement_id) {
-                $departement = Departement::find($user->role->departement_id);
-            }
-
-    // if ($departement !== 'Administration') {
-    //     return response()->json([
-    //         'success' => false,
-    //         'message' => 'Accès non autorisé'
-    //     ], 403);
-    // }
+     if ($user->role->nom !== "Administrateur") {
+         return response()->json([
+            'success' => false,
+            'message' => 'Accès non autorisé'
+        ], 403);
+     }
 
     $request->validate([
         'date_from' => 'nullable|date',
         'date_to' => 'nullable|date|after_or_equal:date_from',
         'user_id' => 'nullable|integer|exists:users,id',
-        // 'departement' => 'nullable|string',
+        'departement' => 'nullable|string',
         'per_page' => 'nullable|integer|min:1|max:100'
     ]);
 
-    $query = DB::table('user_connections')
-                ->join('users', 'user_connections.user_id', '=', 'users.id')
+    $query = DB::table('user_connections as uc')
+                ->join('users as u', 'uc.user_id', '=', 'u.id')
+                ->join('roles as r', 'u.role_id', '=', 'r.id')
+                ->join('departements as d', 'r.departement_id', '=', 'd.id')
                 ->select([
-                    'user_connections.id',
-                    'users.nom',
-                    'users.prenom',
-                    'users.email_pro',
-                    // 'users.departement',
-                    // 'users.role',
-                    'user_connections.login_at',
-                    'user_connections.logout_at',
-                    'user_connections.ip_address',
-                    'user_connections.user_agent',
-                    'user_connections.session_duration'
+                    'uc.id',
+                    'u.nom',
+                    'u.prenom', 
+                    'u.email_pro',
+                    'r.nom as roles',    // Le rôle devient le poste
+                    'd.nom as departement',       // Le nom du département
+                    'uc.login_at',
+                    'uc.logout_at',
+                    'uc.ip_address',
+                    'uc.user_agent',
+                    'uc.session_duration',
+                    'uc.created_at'
                 ])
-                ->orderBy('user_connections.login_at', 'desc');
+                ->orderBy('uc.login_at', 'desc');
 
     // Filtres
     if ($request->date_from) {
-        $query->whereDate('user_connections.login_at', '>=', $request->date_from);
+        $query->whereDate('uc.login_at', '>=', $request->date_from);
     }
 
     if ($request->date_to) {
-        $query->whereDate('user_connections.login_at', '<=', $request->date_to);
+        $query->whereDate('uc.login_at', '<=', $request->date_to);
     }
 
     if ($request->user_id) {
-        $query->where('users.id', $request->user_id);
+        $query->where('u.id', $request->user_id);
     }
 
     if ($request->departement) {
-        $query->where('users.departement', $request->departement);
+        $query->where('d.nom', $request->departement);
     }
 
-    // Si pas de filtre de date, limiter aux 30 derniers jours par défaut
+    // Par défaut, les 30 derniers jours
     if (!$request->date_from && !$request->date_to) {
-        $query->where('user_connections.login_at', '>=', now()->subDays(30));
+        $query->where('uc.login_at', '>=', now()->subDays(30));
     }
 
     $perPage = $request->per_page ?? 50;
     $connections = $query->paginate($perPage);
 
-    // Statistiques rapides
+    // Statistiques
     $stats = [
         'total_connections_today' => DB::table('user_connections')
             ->whereDate('login_at', today())
@@ -208,7 +211,7 @@ public function getMyProjectsOnly()
         'unique_users_today' => DB::table('user_connections')
             ->whereDate('login_at', today())
             ->distinct('user_id')
-            ->count('user_id'),
+            ->count(),
         
         'avg_session_duration' => DB::table('user_connections')
             ->whereNotNull('session_duration')
@@ -217,7 +220,17 @@ public function getMyProjectsOnly()
             
         'total_connections_this_week' => DB::table('user_connections')
             ->whereBetween('login_at', [now()->startOfWeek(), now()->endOfWeek()])
-            ->count()
+            ->count(),
+        
+        // Répartition par département aujourd'hui
+        'connections_by_department' => DB::table('user_connections as uc')
+            ->join('users as u', 'uc.user_id', '=', 'u.id')
+            ->join('roles as r', 'u.role_id', '=', 'r.id')
+            ->join('departements as d', 'r.departement_id', '=', 'd.id')
+            ->whereDate('uc.login_at', today())
+            ->groupBy('d.nom')
+            ->select('d.nom as departement', DB::raw('count(*) as total'))
+            ->get()
     ];
 
     return response()->json([
@@ -225,7 +238,7 @@ public function getMyProjectsOnly()
         'data' => $connections->items(),
         'pagination' => [
             'current_page' => $connections->currentPage(),
-            'last_page' => $connections->lastPage(),
+            'last_page' => $connections->lastPage(), 
             'per_page' => $connections->perPage(),
             'total' => $connections->total(),
             'from' => $connections->firstItem(),
@@ -236,18 +249,18 @@ public function getMyProjectsOnly()
 }
 
 /**
- * Exporter l'historique en CSV
+ * Export CSV avec la bonne structure
  */
 public function exportConnectionHistory(Request $request)
 {
     $user = JWTAuth::parseToken()->authenticate();
     
-    // if ($user->departement !== 'Administration') {
-    //     return response()->json([
-    //         'success' => false,
-    //         'message' => 'Accès non autorisé'
-    //     ], 403);
-    // }
+      if ($user->role->nom !== "Administrateur") {
+         return response()->json([
+            'success' => false,
+            'message' => 'Accès non autorisé'
+        ], 403);
+     }
 
     $request->validate([
         'date_from' => 'nullable|date',
@@ -255,32 +268,34 @@ public function exportConnectionHistory(Request $request)
         'departement' => 'nullable|string'
     ]);
 
-    $query = DB::table('user_connections')
-                ->join('users', 'user_connections.user_id', '=', 'users.id')
+    $query = DB::table('user_connections as uc')
+                ->join('users as u', 'uc.user_id', '=', 'u.id')
+                ->join('roles as r', 'u.role_id', '=', 'r.id')
+                ->join('departements as d', 'r.departement_id', '=', 'd.id')
                 ->select([
-                    'users.nom',
-                    'users.prenom',
-                    'users.email_pro',
-                    // 'users.departement',
-                    // 'users.role_id',
-                    'user_connections.login_at',
-                    'user_connections.logout_at',
-                    'user_connections.session_duration',
-                    'user_connections.ip_address'
+                    'u.nom',
+                    'u.prenom',
+                    'u.email_pro',
+                    'd.nom as departement',
+                    'r.nom',
+                    'uc.login_at',
+                    'uc.logout_at',
+                    'uc.session_duration',
+                    'uc.ip_address'
                 ])
-                ->orderBy('user_connections.login_at', 'desc');
+                ->orderBy('uc.login_at', 'desc');
 
-    // Appliquer les mêmes filtres
+    // Appliquer les filtres
     if ($request->date_from) {
-        $query->whereDate('user_connections.login_at', '>=', $request->date_from);
+        $query->whereDate('uc.login_at', '>=', $request->date_from);
     }
 
     if ($request->date_to) {
-        $query->whereDate('user_connections.login_at', '<=', $request->date_to);
+        $query->whereDate('uc.login_at', '<=', $request->date_to);
     }
 
     if ($request->departement) {
-        $query->where('users.departement', $request->departement);
+        $query->where('d.nom', $request->departement);
     }
 
     $connections = $query->get();
@@ -298,10 +313,10 @@ public function exportConnectionHistory(Request $request)
         // En-têtes CSV
         fputcsv($file, [
             'Nom',
-            'Prénom', 
+            'Prénom',
             'Email professionnel',
             'Département',
-            'Poste',
+            'Poste/Rôle',
             'Date de connexion',
             'Heure de connexion',
             'Date de déconnexion',
@@ -309,20 +324,19 @@ public function exportConnectionHistory(Request $request)
             'Durée de session (min)',
             'Adresse IP'
         ]);
-
+                    
         foreach ($connections as $connection) {
             $loginDate = $connection->login_at ? date('d/m/Y', strtotime($connection->login_at)) : '';
             $loginTime = $connection->login_at ? date('H:i:s', strtotime($connection->login_at)) : '';
             $logoutDate = $connection->logout_at ? date('d/m/Y', strtotime($connection->logout_at)) : '';
             $logoutTime = $connection->logout_at ? date('H:i:s', strtotime($connection->logout_at)) : '';
             $duration = $connection->session_duration ? round($connection->session_duration / 60, 2) : '';
-
             fputcsv($file, [
                 $connection->nom,
                 $connection->prenom,
                 $connection->email_pro,
-                // $connection->departement,
-                // $connection->poste,
+                $connection->departement,
+                $connection->nom,
                 $loginDate,
                 $loginTime,
                 $logoutDate,

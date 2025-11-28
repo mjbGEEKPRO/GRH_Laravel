@@ -16,7 +16,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 class User extends Authenticatable implements JWTSubject
 {
     use Notifiable,HasFactory;
-
+    private $connectionId;
     // Rest omitted for brevity
 
     /**
@@ -35,7 +35,10 @@ class User extends Authenticatable implements JWTSubject
         'lieu_naissance',
         'date_naissance',
         'password',
+        'compte',
         'role_id',
+        'situation_famille',
+        'autoLogout',
     ];
 
 
@@ -50,6 +53,12 @@ class User extends Authenticatable implements JWTSubject
     }
 
 
+    public function setConnectionId($connectionId)
+    {
+        return [
+            $this->connectionId = $connectionId,
+        ];
+    }
     
     /**
      * Return a key value array, containing any custom claims to be added to the JWT.
@@ -59,8 +68,9 @@ class User extends Authenticatable implements JWTSubject
     public function getJWTCustomClaims()
     {
         return [
-            'poste'=> $this->poste,
-            'nom'=> $this->nom
+            'poste'=> $this->role,
+            'nom'=> $this->nom,
+            'connection_id'=> $this->connectionId,
         ];
     }
 
@@ -77,7 +87,9 @@ class User extends Authenticatable implements JWTSubject
 
     public function teams(): BelongsToMany
     {
-        return $this->belongsToMany(Team::class);
+        return $this->belongsToMany(ProjectTeam::class, 'team_members', 'team_id', 'user_id')
+                    ->withPivot('role_in_team')
+                    ->withTimestamps();
     }
 
     public function permissions(): BelongsToMany
@@ -85,26 +97,123 @@ class User extends Authenticatable implements JWTSubject
         return $this->belongsToMany(Permission::class);
     }
 
+ 
+    // Vérifier si l'utilisateur a une permission
+    public function hasPermission($permission)
+    {
+        return $this->permissions()
+            ->where('nom', $permission)
+            ->orWhere('slug', $permission)
+            ->exists();
+    }
+    
+    // Vérifier si l'utilisateur a toutes les permissions
+    public function hasAllPermissions(array $permissions)
+    {
+        foreach ($permissions as $permission) {
+            if (!$this->hasPermission($permission)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    // Vérifier si l'utilisateur a au moins une des permissions
+    public function hasAnyPermission(array $permissions)
+    {
+        foreach ($permissions as $permission) {
+            if ($this->hasPermission($permission)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
 
+         public function preferences()
+    {
+        return $this->hasOne(UserPreference::class);
+    }
 
-        // Méthode pour récupérer toutes les permissions (rôle + directes)
-        public function getAllPermissions()
-        {
-            $rolePermissions = $this->role ? $this->role->permissions : collect([]);
-            $directPermissions = $this->permissions;
+    // Créer automatiquement les préférences et les permissions par défaut lors de la création d'un utilisateur
+    protected static function boot()
+    {
+        parent::boot();
+        // initialiser les préférences lors de la création du users
+        
+        static::created(function ($user) {
+            UserPreference::create([
+                'user_id' => $user->id,
+                'notif_email' => true,
+                'notif_task_reminders' => true,
+                'notif_project_updates' => true,
+                'notif_deadline_alerts' => true,
+                'language' => 'fr',
+                'auto_logout' => 60,
+            ]);
+        });
+
+        // attribuer les permissions par defaut
+         // Quand un user est créé, attribuer automatiquement les permissions
+        static::created(function ($user) {
+            $user->assignDefaultPermissions();
+        });
+
+
+    }
+
+
+     /**
+     * 🎯 Attribuer automatiquement les permissions par défaut
+     */
+    public function assignDefaultPermissions()
+    {
+        $defaultPermissions = $this->getDefaultPermissionsByDepartment();
+        
+        if (!empty($defaultPermissions)) {
+            $permissions = Permission::whereIn('nom', $defaultPermissions)->pluck('id');
+            $this->permissions()->syncWithoutDetaching($permissions);
+        }
+    }
+
+    /**
+     * 📋 Définir les permissions selon le département/poste
+     */
+    private function getDefaultPermissionsByDepartment()
+    {
+        // Mapper selon votre structure (adapter à vos départements)
+        $permissionMap = [
+            'Administration' => [
+                'admin.access',
+                'admin.dashboard',
+                'admin.settings',
+                'users.view',
+                'projects.view',
+                'projects.create',
+                'projects.delete',
+                'permissions.view',
+            ],
             
-            return $rolePermissions->merge($directPermissions)->unique('id');
-        }
+            'Ressources Humaines' => [
+                'employees.view',
+                'employees.create',
+                'leaves.approve',
+                'attendance.view',
+            ],
+            
+            // Permissions par défaut pour tous
+            'default' => [
+                'my.projects',
+                'my.tasks',
+            ],
+        ];
 
-        // Vérifier si l'utilisateur a une permission spécifique
-        public function hasPermission($permission, $resource = null)
-        {
-            return $this->getAllPermissions()->contains(function ($perm) use ($permission, $resource) {
-                return $perm->name === $permission && 
-                    ($resource === null || $perm->resource === $resource);
-            });
-        }
+        // Chercher par département (adapter selon votre structure)
+        $departement = $this->role->departement->nom ?? 'default';
+        
+        return $permissionMap[$departement] ?? $permissionMap['default'];
+    }
+
 }
 
 

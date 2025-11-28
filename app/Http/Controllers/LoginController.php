@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Hash;
 use App\Models\Reserve;
 use Illuminate\Support\Facades\Validator;
 use App\Models\User;
+use App\Models\UserPreference;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,7 @@ class LoginController extends Controller
     public function login(Request $request)
     {
         try {
+            Log::info("arriver");
             // Validation des données d'entrée
             $validation = Validator::make($request->all(), [
                 'email_pro' => [
@@ -63,6 +65,7 @@ class LoginController extends Controller
                 ], 403);
             }
 
+
             //  Vérifier le mot de passe
             if (!Hash::check($request->password, $user->password)) {
                 return response()->json([
@@ -71,28 +74,58 @@ class LoginController extends Controller
                 ], 401);
             }
 
+
             // Après je peuc charger la relation poste maintenant qu'on sait que l'utilisateur est valide
             $user = User::with('role')->where('email_pro', $request->email_pro)->first();
-        //       Log::info('User avec relation:', [
-        //     'user_id' => $user->id,
-        //     'role_id' => $user->role_id,
-        //     'role_object' => $user->role
-        // ]);
+     
+
             // Récupération du département
             $departement = null;
             if ($user->role && $user->role->departement_id) {
                 $departement = Departement::find($user->role->departement_id);
             }
+            Log::info("copte ".$user->compte );
+            if (!$user->compte)
+            {
+                return response()->json([
+                    'success' => false,
+                    'user' => [
+                    'id' => $user->id,
+                    'compte' => $user->compte,
+                    
+                    ],
+            ], );
+            }
+            $connectionId = $this->logUserConnection($user, $request);
 
-            // Génération du token JWT config('jwt.ttl', 60);
-            $token = JWTAuth::fromUser($user);
-            $expirationMinutes = config('jwt.ttl', 60);
-            $expiresAt = Carbon::now()->addMinutes($expirationMinutes);
-            // Enregistrer la connexion
-        $connectionId = $this->logUserConnection($user, $request);
 
+    
+
+        
+
+        $preferences=  $user->preferences()->value('auto_logout');
+        Log::info("prefference users ". $preferences);
+         if (!$preferences) {
+            // Créer des préférences par défaut si elles n'existent pas
+            $preferences = UserPreference::create([
+                'user_id' => $user->id,
+            ]);
+        }   
+
+
+        // Ajouter l'ID de connexion dans le token JWT
+        $customClaims = ['connection_id' => $connectionId];
+        $token = JWTAuth::customClaims($customClaims)->fromUser($user);
+        Log::info("durre ". $preferences);
+        // Génération du token JWT config('jwt.ttl', 60);
+        $expirationMinutes = config('jwt.ttl', $preferences);
+        $expiresAt = Carbon::now()->addMinutes($expirationMinutes);
         // Stocker l'ID de connexion dans la session pour pouvoir l'utiliser lors du logout
         session(['connection_id' => $connectionId]);
+        $permisions=$user->permissions()
+        ->select('permissions.id', 'permissions.nom', 'permissions.slug', 'permissions.description')
+        ->get();
+ Log::info("durre ". $expirationMinutes);
 
             return response()->json([
                 'success' => true,
@@ -110,11 +143,18 @@ class LoginController extends Controller
                 ],
                 'access_token' => $token,
                 'expires_at' => $expiresAt->toISOString(),
-                'expires_in' => $expirationMinutes
+                'expires_in' => $expirationMinutes,
+                'permisions' => $permisions
             ], 200);
             
         } catch (\Exception $e) {
-            Log::error('Erreur de connexion: ' . $e->getMessage());
+             Log::error('Erreur lors de la connexion:', [
+            'message' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'data' => $request->all() // Log des données reçues pour debug
+        ]);
+        
             return response()->json([
                 'success' => false,
                 'message' => "Erreure lors de la connexion"
@@ -131,85 +171,68 @@ private function logUserConnection($user, $request)
         'login_at' => now(),
         'ip_address' => $request->ip(),
         'user_agent' => $request->userAgent(),
-        'device_info' => $this->getDeviceInfo($request),
         'created_at' => now(),
         'updated_at' => now()
     ]);
 }
 
-// Méthode pour extraire les informations de l'appareil
-private function getDeviceInfo($request)
-{
-    $userAgent = $request->userAgent();
-    
-    // Simple détection du navigateur
-    if (strpos($userAgent, 'Chrome') !== false) {
-        $browser = 'Chrome';
-    } elseif (strpos($userAgent, 'Firefox') !== false) {
-        $browser = 'Firefox';
-    } elseif (strpos($userAgent, 'Safari') !== false) {
-        $browser = 'Safari';
-    } elseif (strpos($userAgent, 'Edge') !== false) {
-        $browser = 'Edge';
-    } else {
-        $browser = 'Autre';
-    }
-    
-    // Simple détection du système
-    if (strpos($userAgent, 'Windows') !== false) {
-        $os = 'Windows';
-    } elseif (strpos($userAgent, 'Mac') !== false) {
-        $os = 'MacOS';
-    } elseif (strpos($userAgent, 'Linux') !== false) {
-        $os = 'Linux';
-    } elseif (strpos($userAgent, 'Android') !== false) {
-        $os = 'Android';
-    } elseif (strpos($userAgent, 'iPhone') !== false) {
-        $os = 'iOS';
-    } else {
-        $os = 'Autre';
-    }
-    
-    return $browser . ' sur ' . $os;
-}
 
 // Méthode de déconnexion modifiée
 public function logout(Request $request)
 {
     try {
         $user = JWTAuth::parseToken()->authenticate();
-        $connectionId = session('connection_id');
-        // Mettre à jour l'enregistrement de connexion avec l'heure de déconnexion
+        $payload = JWTAuth::parseToken()->getPayload();
+        
+        // Récupérer l'ID depuis le token
+        $connectionId = $payload->get('connection_id');
+        Log::info("id connect ". $connectionId);
         if ($connectionId) {
-            $connection = DB::table('user_connections')->find($connectionId);
-            if ($connection) {
-                $sessionDuration = now()->diffInSeconds($connection->login_at);
-                
-                DB::table('user_connections')
-                    ->where('id', $connectionId)
-                    ->update([
-                        'logout_at' => now(),
-                        'session_duration' => $sessionDuration,
-                        'updated_at' => now()
-                    ]);
-            }
+            $this->updateConnectionLogout($connectionId);
+        } else {
+            // Fallback : chercher la dernière connexion active
+            $this->updateLastActiveConnection($user->id);
         }
         
         JWTAuth::invalidate(JWTAuth::getToken());
         
-        // Nettoyer la session
-        session()->forget('connection_id');
-        
-        return response()->json([
-            'success' => true,
-            'message' => 'Déconnexion réussie'
-        ]);
-        
+        return response()->json(['success' => true]);
     } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Erreur lors de la déconnexion'
-        ], 500);
+        Log::error('Logout error:', ['error' => $e->getMessage()]);
+        return response()->json(['success' => false], 500);
+    }
+}
+
+private function updateConnectionLogout($connectionId)
+{
+    $connection = DB::table('user_connections')->find($connectionId);
+    
+    if ($connection && !$connection->logout_at) {
+        $duration = now()->diffInSeconds($connection->login_at);
+        
+        DB::table('user_connections')
+            ->where('id', $connectionId)
+            ->update([
+                'logout_at' => now(),
+                'session_duration' => $duration,
+                'updated_at' => now()
+            ]);
+        
+        Log::info('Connection closed:', ['id' => $connectionId, 'duration' => $duration]);
+    }
+}
+
+private function updateLastActiveConnection($userId)
+{
+    $lastConnection = DB::table('user_connections')
+        ->where('user_id', $userId)
+        ->whereNull('logout_at')
+        ->orderBy('login_at', 'desc')
+        ->first();
+        
+    if ($lastConnection) {
+        $this->updateConnectionLogout($lastConnection->id);
+        Log::info('Fallback connection closed:', ['id' => $lastConnection->id]);
     }
 }
 }

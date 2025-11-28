@@ -61,7 +61,8 @@ class forgetPassControlleur extends Controller
                 return response()->json([
                     'success' => true,
                     'message' => "Nous allons vous envoyer un code de réinitiaisation dans votre mail personnel",
-                    'id'=> $user->id
+                    'id'=> $user->id,
+                    'nom'=> $user->nom,
                 ], 200);
             }
             

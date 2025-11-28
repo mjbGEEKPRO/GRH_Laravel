@@ -16,11 +16,11 @@ class UserInfoControler extends Controller
     public function getInfo(){
         try {
             // Récupérer les utilisateurs avec leurs relations
-            $users = User::with(['role','permissions','teams'])->get();
-            $teams = ProjectTeam::all();
+            $users = User::where('statut', true)->with(['role','permissions','teams'])->get();
+            $teams = ProjectTeam::with('project')->get();
             $permissions = Permission::all();
             $postes = Role::all();
-            Log::info("teams rcupérer ". $teams);
+            Log::info("user rcupérer ". $permissions);
             return response()->json([
                 'users' => $users,
                 'role' => $postes,
@@ -95,7 +95,7 @@ class UserInfoControler extends Controller
                 if ($existeUser) {
                     return response()->json([
                         'success' => false,
-                        'message' => 'Cet email est déjà utilisé par un autre utilisateur',
+                        'message' => 'Cet email professionnel est déjà utilisé par un autre employer',
                     ], 422);
                 }
                $updateData['email_pro']= $request->email_pro;
@@ -132,6 +132,25 @@ class UserInfoControler extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur serveur: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+
+    public function UserModal(){
+        try {
+            // Récupérer les utilisateurs avec leurs relations
+            $users = User::all();
+            Log::info("user send ", $users);
+            return response()->json([
+                'users' => $users,
+            ]);
+        }
+        catch (\Exception $e)
+        {
+            Log::info(" Erreur". $e);
+            return response()->json([
+                'message' => 'Erreur interne: ' . $e->getMessage(),
             ], 500);
         }
     }
