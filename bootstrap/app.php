@@ -15,6 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'auth' =>\App\Http\Middleware\AuthApiMiddleware::class,
             'track.connection' => \App\Http\Middleware\TrackConnectionStatus::class,
             'permission' => \App\Http\Middleware\CheckPermission::class,
+            'admin' => \App\Http\Middleware\CheckAdminRole::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

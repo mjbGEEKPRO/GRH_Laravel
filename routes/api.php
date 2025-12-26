@@ -10,8 +10,10 @@ use App\Http\Controllers\TaskController;
 use App\Http\Controllers\UserInfoControler;
 use App\Http\Controllers\changePassController;
 use App\Http\Controllers\DepartementController;
+use App\Http\Controllers\BlockedAccountsController;
 use App\Http\Controllers\JsonDataController;
 use App\Http\Controllers\settingController;
+use App\Http\Controllers\SecurityDashboardController;
 use App\Models\Departement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -36,6 +38,29 @@ Route::put('/preferences/{id}', [settingController::class, 'preferences']);
 Route::put('/compte/{id}', [settingController::class, 'compte']);
 //ecriture dans json
 Route::apiResource('json-data', JsonDataController::class);
+
+
+Route::middleware(['auth:api', 'admin'])->prefix('security')->group(function () {
+    
+    // Récupérer le nombre de comptes bloqués (pour le badge)
+    Route::get('/blocked-count', [BlockedAccountsController::class, 'getBlockedCount']);
+    
+    // Récupérer tous les comptes bloqués (utilisateurs + IP)
+    Route::get('/blocked-accounts', [BlockedAccountsController::class, 'getBlockedAccounts']);
+    
+    // Récupérer les utilisateurs actifs
+    Route::get('/active-users', [BlockedAccountsController::class, 'getActiveUsers']);
+    
+    // Débloquer un utilisateur
+    Route::post('/unblock-user/{userId}', [BlockedAccountsController::class, 'unblockUser']);
+    
+    // Bloquer un utilisateur
+    Route::post('/block-user/{userId}', [BlockedAccountsController::class, 'blockUser']);
+    
+    // Débloquer une IP
+    Route::post('/unblock-ip/{ipAddress}', [BlockedAccountsController::class, 'unblockIP']);
+    
+});
 
 
 Route::group(['middleware' => 'auth:api'], function () {    
@@ -91,21 +116,20 @@ Route::middleware('auth:api')->get('/check-token', function () {
 
 // Routes pour l'historique de connexion (accès admin uniquement)
 Route::group(['prefix' => 'admin', 'middleware' => 'auth:api'], function () {
-    Route::get('/connection-history', [DashboardController::class, 'getConnectionHistory']);
-    Route::get('/connection-history/export', [DashboardController::class, 'exportConnectionHistory']);
+    Route::get('/connection-history', [SecurityDashboardController::class, 'getConnectionHistory']);
+    Route::get('/connection-history/export', [SecurityDashboardController::class, 'exportConnectionHistory']);
 });
 
 
 //Route pour supprimer les teams
-
-// Supprimer plusieurs équipes à la fois
 Route::delete('/projects/{projectId}', [DeleteControler::class, 'deleteTeams']);
 
-// Route::middleware(['auth'])->group(function () {
-//     Route::post('/refresh', [AuthController::class, 'refresh']);
-//     Route::get('/me', [AuthController::class, 'me']);
-    
-// });
+
+
+//Route pour l'historiques du dashboard
+ Route::middleware(['auth:api'])->group(function () {
+     Route::get('/dashboard', [DashboardController::class, 'index']);
+ });
 
 
 //Route pour recupéer les permissions des users

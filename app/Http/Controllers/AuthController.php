@@ -211,6 +211,7 @@ class AuthController extends Controller
             $email_pro = $request->input('email_pro');
             $user->statut = $statut ;
             $user->email_pro = $email_pro;
+            $user->compte = true;
             $user->password = Hash::make($password);
             $user->save();
             

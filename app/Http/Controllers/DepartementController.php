@@ -5,6 +5,7 @@ use App\Models\Departement;
 use App\Models\Poste;
 use App\Http\Requests\StoreDepartementRequest;
 use App\Models\Role;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,8 +20,8 @@ class DepartementController extends Controller
     public function index(): JsonResponse
     {
         try {
-            $departements = Departement::with('postes')
-                ->withCount('postes')
+            $departements = Departement::with(['postes', 'roles'])
+                ->withCount(['postes', 'roles'])
                 ->orderBy('nom')
                 ->get();
 
@@ -43,7 +44,7 @@ class DepartementController extends Controller
     public function show($id): JsonResponse
     {
         try {
-            $departement = Departement::with('postes')->findOrFail($id);
+            $departement = Departement::with(['postes', 'roles.users'])->findOrFail($id);
 
             return response()->json([
                 'success' => true,
@@ -60,90 +61,118 @@ class DepartementController extends Controller
     /**
      * Crée un nouveau département avec ses postes
      */
-    public function store(StoreDepartementRequest $request): JsonResponse
-    {
-        Log::info("arriver");
-        DB::beginTransaction();
+    public function store(Request $request): JsonResponse
+{
+    // Validation
+    $validator = Validator::make($request->all(), [
+        'nom' => 'required|string|max:255',
+        'description' => 'nullable|string|max:1000',
+        'postes' => 'required|array|min:1',
+        'postes.*' => 'required|string|max:255|distinct'
+    ]);
 
-        try {
-            // Créer le département
-            $departement = Departement::create([
-                'nom' => $request->nom,
-                'description' => $request->description,
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => $validator->errors()->first()
+        ], 422);
+    }
+
+    DB::beginTransaction();
+
+    try {
+        // ✅ Vérifier si le département existe déjà (insensible à la casse)
+        $existingDepartement = Departement::whereRaw('LOWER(nom) = ?', [strtolower($request->nom)])->first();
+        
+        if ($existingDepartement) {
+            return response()->json([
+                'success' => false,
+                'message' => "Le département '{$request->nom}' existe déjà"
+            ], 422);
+        }
+
+        // Créer le département
+        $departement = Departement::create([
+            'nom' => $request->nom,
+            'description' => $request->description ?? null,
+            'is_active' => true
+        ]);
+
+        // Vérifier que l'ID a bien été créé
+        if (!$departement->id) {
+            throw new Exception("Le département n'a pas été créé correctement");
+        }
+
+        Log::info("Département créé avec ID: " . $departement->id);
+
+        $postesCreated = [];
+        foreach ($request->postes as $posteNom) {
+            
+            $existingPoste = Role::where('nom', $posteNom)
+                ->where('departement_id', $departement->id)
+                ->first();
+            
+            if ($existingPoste) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => "Le poste '{$posteNom}' existe déjà dans ce département"
+                ], 422);
+            }
+
+            $poste = Role::create([
+                'nom' => $posteNom,
+                'departement_id' => $departement->id,
                 'is_active' => true
             ]);
 
-            // Créer les postes associés
-            $postesData = [];
-            foreach ($request->postes as $posteNom) {
-                // Vérifier si le poste existe déjà dans un autre département
-                $existingPoste = Role::where('nom', $posteNom)
-                    ->whereHas('departement', function($query) use ($departement) {
-                        $query->where('id', '!=', $departement->id);
-                    })
-                    ->first();
-
-                if ($existingPoste) {
-                    DB::rollBack();
-                    return response()->json([
-                        'success' => false,
-                        'message' => "Le poste '{$posteNom}' existe déjà dans le département '{$existingPoste->departement->nom}'"
-                    ], 422);
-                }
-
-                $postesData[] = [
-                    'nom' => $posteNom,
-                    'departement_id' => $departement->id,
-                    'is_active' => true,
-                    'created_at' => now(),
-                    'updated_at' => now()
-                ];
-            }
-
-            // Insertion en masse pour optimisation
-            Role::insert($postesData);
-
-            // Recharger le département avec ses postes
-            $departement->load('postes');
-
-            DB::commit();
-
-          
-
-            return response()->json([
-                'success' => true,
-                'message' => "Département '{$departement->nom}' créé avec succès avec " . count($postesData) . " poste(s)",
-                'departement' => $departement
-            ], 201);
-
-        } catch (Exception $e) {
-            DB::rollBack();
-            Log::error('Erreur création département: ' . $e->getMessage());
-            
-            return response()->json([
-                'success' => false,
-                'message' => 'Erreur lors de la création du département',
-                'error' => config('app.debug') ? $e->getMessage() : null
-            ], 500);
+            $postesCreated[] = $poste;
+            Log::info("Poste créé: {$poste->nom}");
         }
-    }
 
+        // Recharger le département avec ses roles/postes
+        $departement->load('postes');
+
+        DB::commit();
+
+        Log::info("Département '{$departement->nom}' créé avec " . count($postesCreated) . " postes", [
+            'departement_id' => $departement->id,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Département '{$departement->nom}' créé avec succès avec " . count($postesCreated) . " poste(s)",
+            'departement' => $departement
+        ], 201);
+
+    } catch (Exception $e) {
+        DB::rollBack();
+        Log::error('Erreur création département: ' . $e->getMessage());
+        Log::error('Stack trace: ' . $e->getTraceAsString());
+        
+        return response()->json([
+            'success' => false,
+            'message' => 'Erreur lors de la création du département',
+            'error' => config('app.debug') ? $e->getMessage() : 'Erreur serveur'
+        ], 500);
+    }
+}
     /**
      * Met à jour un département
      */
     public function update(Request $request, $id): JsonResponse
     {
-        $request->validate([
-            'nom' => [
-                'sometimes',
-                'required',
-                'string',
-                'max:255',
-                Role::unique('departements', 'nom')->ignore($id)
-            ],
-            'description' => 'nullable|string|max:1000',
-            'is_active' => 'sometimes|boolean'
+        $validator = Validator::make($request->all(), [
+            'nom' => 'sometimes|required|string|max:255|unique:departements,nom,' . $id,
+            
         ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => $validator->errors()->first()
+            ], 422);
+        }
 
         DB::beginTransaction();
 
@@ -160,7 +189,7 @@ class DepartementController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Département mis à jour avec succès',
-                'departement' => $departement->load('postes')
+                'departement' => $departement->load(['postes', 'roles'])
             ]);
 
         } catch (Exception $e) {
@@ -175,27 +204,29 @@ class DepartementController extends Controller
     }
 
     /**
-     * Supprime un département (et ses postes en cascade)
+     * Supprime un département
      */
     public function destroy($id): JsonResponse
     {
         DB::beginTransaction();
 
         try {
-            $departement = Departement::with('postes', 'users')->findOrFail($id);
+            $departement = Departement::with(['postes', 'roles.users'])->findOrFail($id);
 
-            // Vérifier si des utilisateurs sont liés à ce département
-            if ($departement->users()->count() > 0) {
+            // Vérifier si des rôles (et donc des users) sont liés à ce département
+            $nbUsers = $departement->users()->count();
+            if ($nbUsers > 0) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Impossible de supprimer ce département car ' . $departement->users()->count() . ' utilisateur(s) y sont rattachés'
+                    'message' => "Impossible de supprimer ce département car {$nbUsers} utilisateur(s) y sont rattachés via des rôles"
                 ], 422);
             }
 
             $nomDepartement = $departement->nom;
             $nbPostes = $departement->postes()->count();
+            $nbRoles = $departement->roles()->count();
 
-            // Suppression (les postes seront supprimés en cascade)
+            // Suppression (les postes et rôles seront supprimés en cascade)
             $departement->delete();
 
             DB::commit();
@@ -203,11 +234,12 @@ class DepartementController extends Controller
             Log::warning("Département supprimé: {$nomDepartement}", [
                 'departement_id' => $id,
                 'postes_supprimes' => $nbPostes,
+                'roles_supprimes' => $nbRoles,
             ]);
 
             return response()->json([
                 'success' => true,
-                'message' => "Département '{$nomDepartement}' et ses {$nbPostes} poste(s) supprimés avec succès"
+                'message' => "Département '{$nomDepartement}' supprimé avec ses {$nbPostes} poste(s) et {$nbRoles} rôle(s)"
             ]);
 
         } catch (Exception $e) {
@@ -219,37 +251,5 @@ class DepartementController extends Controller
                 'message' => 'Erreur lors de la suppression'
             ], 500);
         }
-    }
-
-    /**
-     * Vérifie si un poste existe déjà
-     */
-    public function checkPosteExists(Request $request): JsonResponse
-    {
-        $request->validate([
-            'nom' => 'required|string',
-            'departement_id' => 'nullable|exists:departements,id'
-        ]);
-
-        $query = Role::where('nom', $request->nom);
-
-        if ($request->departement_id) {
-            $query->where('departement_id', '!=', $request->departement_id);
-        }
-
-        $existingPoste = $query->with('departement')->first();
-
-        if ($existingPoste) {
-            return response()->json([
-                'exists' => true,
-                'poste' => $existingPoste,
-                'message' => "Ce poste existe déjà dans le département '{$existingPoste->departement->nom}'"
-            ]);
-        }
-
-        return response()->json([
-            'exists' => false,
-            'message' => 'Ce poste est disponible'
-        ]);
     }
 }

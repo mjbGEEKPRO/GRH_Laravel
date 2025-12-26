@@ -2,354 +2,240 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Departement;
-use App\Models\Project;
-use App\Models\Role;
-use App\Models\Task;
-use App\Models\User;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
-use Tymon\JWTAuth\Facades\JWTAuth;
+use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
-    public function __construct()
-    {
-        $this->middleware('auth:api');
-    }
-
-    public function getEmployeeData()
-    {
-        $user = JWTAuth::parseToken()->authenticate();
-        $myTasks = Task::with(['project'])
-                      ->where('assigne_a_user_id', $user->id)
-                      ->get();
-
-        $projectIds = $myTasks->pluck('projet_id')->filter()->unique();
-        $myProjects = Project::whereIn('id', $projectIds)->get();
-
-        $stats = [
-            'totalTasks' => $myTasks->count(),
-            'completedTasks' => $myTasks->where('statut', 'Terminé')->count(),
-            'inProgressTasks' => $myTasks->where('statut', 'En cours')->count(),
-            'pendingTasks' => $myTasks->where('statut', 'A faire')->count(),
-            'overdueTasks' => $myTasks->filter(fn($task) => $task->is_overdue)->count(),
-            'projectsCount' => $myProjects->count()
-        ];
-        Log::info("data Task ".$myTasks);
-        Log::info("data project ".$myProjects);
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'tasks' => $myTasks,
-                'projects' => $myProjects,
-                'stats' => $stats
-            ]
-        ]);
-    }
-
-    public function getAdminData()
-    {
-        $query = Project::with(['creator', 'tasks', 'teams']);
-        $projects = $query->latest()->get();
-        $departement = Departement::whereNotIn("nom", ["Administration"])->get();
-        
-        $data = [
-            'task' => Task::with(['project', 'assignedUser', 'creator'])->get(),
-            'user' => User::where('statut', true)->get(),            
-            'projects' => $projects,            
-            'departements' => $departement,            
-        ];
-        Log::info("task satut ".  $data['task'] );
-        return response()->json([
-            'success' => true,
-            'data' => $data
-        ]);
-    }
-
-
-public function getMyTasksOnly()
-{
-    try {
-        $user = JWTAuth::user();
-        $tasks = Task::with(['project', 'creator'])
-                    ->where('assigne_a_user_id', $user->id)
-                    ->orderBy('date_echeance', 'asc')
-                    ->get();
-
-        // Ajouter les informations calculées
-        $tasks->each(function ($task) {
-            $task->is_overdue = $task->is_overdue;
-            $task->days_until_deadline = $task->days_until_deadline;
-        });
-
-        return response()->json([
-            'success' => true,
-            'data' => $tasks
-        ]);
-
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Erreur lors du chargement des tâches',
-            'error' => $e->getMessage()
-        ], 500);
-    }
-}
-
-public function getMyProjectsOnly()
-{
-    try {
-        $user = JWTAuth::user();
-        
-        // Récupérer tous les projets où j'ai des tâches
-        $myProjects = Project::whereHas('tasks', function($q) use ($user) {
-                                $q->where('assigne_a_user_id', $user->id);
-                            })
-                            ->with(['tasks' => function($q) use ($user) {
-                                $q->where('assigne_a_user_id', $user->id)
-                                  ->with('creator');
-                            }])
-                            ->get();
-
-        // Calculer la progression et renommer les relations
-        $myProjects->each(function ($project) {
-            $project->progression = $project->progress_percentage;
-            $project->myTasks = $project->tasks;
-            unset($project->tasks); // Supprimer l'ancienne clé
-        });
-
-        return response()->json([
-            'success' => true,
-            'data' => $myProjects
-        ]);
-
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Erreur lors du chargement des projets',
-            'error' => $e->getMessage()
-        ], 500);
-    }
-}
-
-
-
-public function getConnectionHistory(Request $request)
-{
-    $user = JWTAuth::parseToken()->authenticate();
-    $user->role->departement_id;
-    Log::info("user ". $user->role);
     
-     if ($user->role->nom !== "Administrateur") {
-         return response()->json([
-            'success' => false,
-            'message' => 'Accès non autorisé'
-        ], 403);
-     }
+    public function index()
+    {
+        try {
+            // Statistiques principales
+            $stats = $this->getStats();
 
-    $request->validate([
-        'date_from' => 'nullable|date',
-        'date_to' => 'nullable|date|after_or_equal:date_from',
-        'user_id' => 'nullable|integer|exists:users,id',
-        'departement' => 'nullable|string',
-        'per_page' => 'nullable|integer|min:1|max:100'
-    ]);
-
-    $query = DB::table('user_connections as uc')
-                ->join('users as u', 'uc.user_id', '=', 'u.id')
-                ->join('roles as r', 'u.role_id', '=', 'r.id')
-                ->join('departements as d', 'r.departement_id', '=', 'd.id')
-                ->select([
-                    'uc.id',
-                    'u.nom',
-                    'u.prenom', 
-                    'u.email_pro',
-                    'r.nom as roles',    // Le rôle devient le poste
-                    'd.nom as departement',       // Le nom du département
-                    'uc.login_at',
-                    'uc.logout_at',
-                    'uc.ip_address',
-                    'uc.user_agent',
-                    'uc.session_duration',
-                    'uc.created_at'
-                ])
-                ->orderBy('uc.login_at', 'desc');
-
-    // Filtres
-    if ($request->date_from) {
-        $query->whereDate('uc.login_at', '>=', $request->date_from);
-    }
-
-    if ($request->date_to) {
-        $query->whereDate('uc.login_at', '<=', $request->date_to);
-    }
-
-    if ($request->user_id) {
-        $query->where('u.id', $request->user_id);
-    }
-
-    if ($request->departement) {
-        $query->where('d.nom', $request->departement);
-    }
-
-    // Par défaut, les 30 derniers jours
-    if (!$request->date_from && !$request->date_to) {
-        $query->where('uc.login_at', '>=', now()->subDays(30));
-    }
-
-    $perPage = $request->per_page ?? 50;
-    $connections = $query->paginate($perPage);
-
-    // Statistiques
-    $stats = [
-        'total_connections_today' => DB::table('user_connections')
-            ->whereDate('login_at', today())
-            ->count(),
-        
-        'unique_users_today' => DB::table('user_connections')
-            ->whereDate('login_at', today())
-            ->distinct('user_id')
-            ->count(),
-        
-        'avg_session_duration' => DB::table('user_connections')
-            ->whereNotNull('session_duration')
-            ->whereDate('login_at', today())
-            ->avg('session_duration'),
             
-        'total_connections_this_week' => DB::table('user_connections')
-            ->whereBetween('login_at', [now()->startOfWeek(), now()->endOfWeek()])
-            ->count(),
-        
-        // Répartition par département aujourd'hui
-        'connections_by_department' => DB::table('user_connections as uc')
-            ->join('users as u', 'uc.user_id', '=', 'u.id')
-            ->join('roles as r', 'u.role_id', '=', 'r.id')
-            ->join('departements as d', 'r.departement_id', '=', 'd.id')
-            ->whereDate('uc.login_at', today())
-            ->groupBy('d.nom')
-            ->select('d.nom as departement', DB::raw('count(*) as total'))
-            ->get()
-    ];
-
-    return response()->json([
-        'success' => true,
-        'data' => $connections->items(),
-        'pagination' => [
-            'current_page' => $connections->currentPage(),
-            'last_page' => $connections->lastPage(), 
-            'per_page' => $connections->perPage(),
-            'total' => $connections->total(),
-            'from' => $connections->firstItem(),
-            'to' => $connections->lastItem()
-        ],
-        'stats' => $stats
-    ]);
-}
-
-/**
- * Export CSV avec la bonne structure
- */
-public function exportConnectionHistory(Request $request)
-{
-    $user = JWTAuth::parseToken()->authenticate();
-    
-      if ($user->role->nom !== "Administrateur") {
-         return response()->json([
-            'success' => false,
-            'message' => 'Accès non autorisé'
-        ], 403);
-     }
-
-    $request->validate([
-        'date_from' => 'nullable|date',
-        'date_to' => 'nullable|date|after_or_equal:date_from',
-        'departement' => 'nullable|string'
-    ]);
-
-    $query = DB::table('user_connections as uc')
-                ->join('users as u', 'uc.user_id', '=', 'u.id')
-                ->join('roles as r', 'u.role_id', '=', 'r.id')
-                ->join('departements as d', 'r.departement_id', '=', 'd.id')
-                ->select([
-                    'u.nom',
-                    'u.prenom',
-                    'u.email_pro',
-                    'd.nom as departement',
-                    'r.nom',
-                    'uc.login_at',
-                    'uc.logout_at',
-                    'uc.session_duration',
-                    'uc.ip_address'
-                ])
-                ->orderBy('uc.login_at', 'desc');
-
-    // Appliquer les filtres
-    if ($request->date_from) {
-        $query->whereDate('uc.login_at', '>=', $request->date_from);
-    }
-
-    if ($request->date_to) {
-        $query->whereDate('uc.login_at', '<=', $request->date_to);
-    }
-
-    if ($request->departement) {
-        $query->where('d.nom', $request->departement);
-    }
-
-    $connections = $query->get();
-
-    $filename = 'historique_connexions_' . date('Y-m-d_H-i-s') . '.csv';
-    
-    $headers = [
-        'Content-Type' => 'text/csv',
-        'Content-Disposition' => 'attachment; filename="' . $filename . '"'
-    ];
-
-    $callback = function() use ($connections) {
-        $file = fopen('php://output', 'w');
-        
-        // En-têtes CSV
-        fputcsv($file, [
-            'Nom',
-            'Prénom',
-            'Email professionnel',
-            'Département',
-            'Poste/Rôle',
-            'Date de connexion',
-            'Heure de connexion',
-            'Date de déconnexion',
-            'Heure de déconnexion',
-            'Durée de session (min)',
-            'Adresse IP'
-        ]);
-                    
-        foreach ($connections as $connection) {
-            $loginDate = $connection->login_at ? date('d/m/Y', strtotime($connection->login_at)) : '';
-            $loginTime = $connection->login_at ? date('H:i:s', strtotime($connection->login_at)) : '';
-            $logoutDate = $connection->logout_at ? date('d/m/Y', strtotime($connection->logout_at)) : '';
-            $logoutTime = $connection->logout_at ? date('H:i:s', strtotime($connection->logout_at)) : '';
-            $duration = $connection->session_duration ? round($connection->session_duration / 60, 2) : '';
-            fputcsv($file, [
-                $connection->nom,
-                $connection->prenom,
-                $connection->email_pro,
-                $connection->departement,
-                $connection->nom,
-                $loginDate,
-                $loginTime,
-                $logoutDate,
-                $logoutTime,
-                $duration,
-                $connection->ip_address
+            // Activité de connexion des 7 derniers jours
+            $loginActivity = $this->getLoginActivity();
+            
+            // Distribution des rôles
+            $roleDistribution = $this->getRoleDistribution();
+            
+            // Logs d'activité récents
+            $recentLogs = $this->getRecentLogs();
+            
+            // Alertes de sécurité
+            $securityAlerts = $this->getSecurityAlerts();
+            
+            return response()->json([
+                'success' => true,
+                'stats' => $stats,
+                'loginActivity' => $loginActivity,
+                'roleDistribution' => $roleDistribution,
+                'recentLogs' => $recentLogs,
+                'securityAlerts' => $securityAlerts
             ]);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors du chargement du dashboard',
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        fclose($file);
-    };
-
-    return response()->stream($callback, 200, $headers);
-}
-
+    }
+    
+    /**
+     * Récupère les statistiques principales
+     */
+    private function getStats()
+    {
+        // Total utilisateurs
+        $totalUsers = DB::table('users')->count();
+        
+        // Utilisateurs actifs (qui ont un compte activé)
+        $activeUsers = DB::table('users')
+            ->where('compte', 1)
+            ->where('statut', 1)
+            ->count();
+        
+        // Connexions réussies dans les dernières 24h
+        $successfulLogins = DB::table('user_connections')
+            ->where('login_at', '>=', Carbon::now()->subDay())
+            ->whereNotNull('logout_at')
+            ->count();
+        
+        // Échecs de connexion dans les dernières 24h
+        $failedLogins = DB::table('failed_login_attempts')
+            ->where('attempted_at', '>=', Carbon::now()->subDay())
+            ->count();
+        
+        // Sessions actives (connectés actuellement)
+        $activeSessions = DB::table('user_connections')
+            ->whereNotNull('login_at')
+            ->whereNull('logout_at')
+            ->where('login_at', '>=', Carbon::now()->subHours(12))
+            ->count();
+        
+        // Utilisateurs bloqués (statut = 0)
+        $blockedUsers = DB::table('users')
+            ->where('statut', 0)
+            ->count();
+        
+        return [
+            'totalUsers' => $totalUsers,
+            'activeUsers' => $activeUsers,
+            'successfulLogins' => $successfulLogins,
+            'failedLogins' => $failedLogins,
+            'activeSessions' => $activeSessions,
+            'blockedUsers' => $blockedUsers
+        ];
+    }
+    
+    /**
+     * Récupère l'activité de connexion des 7 derniers jours
+     */
+    private function getLoginActivity()
+    {
+        $activity = [];
+        
+        for ($i = 6; $i >= 0; $i--) {
+            $date = Carbon::now()->subDays($i);
+            $dateStr = $date->format('d/m');
+            
+            // Connexions réussies
+            $success = DB::table('user_connections')
+                ->whereDate('login_at', $date->format('Y-m-d'))
+                ->whereNotNull('logout_at')
+                ->count();
+            
+            // Connexions échouées
+            $failed = DB::table('failed_login_attempts')
+                ->whereDate('attempted_at', $date->format('Y-m-d'))
+                ->count();
+            
+            $activity[] = [
+                'date' => $dateStr,
+                'success' => $success,
+                'failed' => $failed
+            ];
+        }
+        
+        return $activity;
+    }
+    
+    /**
+     * Récupère la distribution des rôles
+     */
+    private function getRoleDistribution()
+    {
+        $roles = DB::table('users')
+            ->join('roles', 'users.role_id', '=', 'roles.id')
+            ->select('roles.nom as name', DB::raw('COUNT(*) as value'))
+            ->whereNotNull('users.role_id')
+            ->groupBy('roles.id', 'roles.nom')
+            ->get();
+        
+        return $roles->map(function($role) {
+            return [
+                'name' => $role->name,
+                'value' => (int) $role->value
+            ];
+        })->toArray();
+    }
+    
+    /**
+     * Récupère les logs d'activité récents
+     */
+    private function getRecentLogs()
+    {
+        $logs = DB::table('user_connections')
+            ->join('users', 'user_connections.user_id', '=', 'users.id')
+            ->select(
+                'user_connections.login_at',
+                'user_connections.logout_at',
+                'user_connections.ip_address',
+                DB::raw("CONCAT(users.prenom, ' ', users.nom) as user_name")
+            )
+            ->orderBy('user_connections.login_at', 'desc')
+            ->limit(10)
+            ->get();
+        
+        return $logs->map(function($log) {
+            $status = 'success';
+            $action = 'Connexion réussie';
+            
+            if (is_null($log->logout_at)) {
+                $status = 'warning';
+                $action = 'Session active';
+            }
+            
+            return [
+                'timestamp' => Carbon::parse($log->login_at)->format('d/m/Y H:i:s'),
+                'user' => $log->user_name,
+                'action' => $action,
+                'ip' => $log->ip_address ?? 'N/A',
+                'status' => $status
+            ];
+        })->toArray();
+    }
+    
+    /**
+     * Récupère les alertes de sécurité
+     */
+    private function getSecurityAlerts()
+    {
+        $alerts = [];
+        
+        // Vérifier les connexions multiples échouées
+        $suspiciousIPs = DB::table('failed_login_attempts')
+            ->select('ip_address', DB::raw('COUNT(*) as attempts'))
+            ->where('attempted_at', '>=', Carbon::now()->subHour())
+            ->groupBy('ip_address')
+            ->having('attempts', '>', 5)
+            ->get();
+        
+        foreach ($suspiciousIPs as $ip) {
+            $alerts[] = [
+                'severity' => 'critical',
+                'title' => 'Tentatives de connexion suspectes',
+                'message' => "L'adresse IP {$ip->ip_address} a effectué {$ip->attempts} tentatives de connexion en 1 heure",
+                'timestamp' => Carbon::now()->format('d/m/Y H:i:s')
+            ];
+        }
+        
+        // Vérifier les utilisateurs récemment bloqués
+        $recentlyBlocked = DB::table('users')
+            ->where('statut', 0)
+            ->where('updated_at', '>=', Carbon::now()->subDay())
+            ->count();
+        
+        if ($recentlyBlocked > 0) {
+            $alerts[] = [
+                'severity' => 'warning',
+                'title' => 'Comptes bloqués récemment',
+                'message' => "{$recentlyBlocked} compte(s) ont été bloqués dans les dernières 24 heures",
+                'timestamp' => Carbon::now()->format('d/m/Y H:i:s')
+            ];
+        }
+        
+        // Vérifier les sessions anormalement longues
+        $longSessions = DB::table('user_connections')
+            ->where('session_duration', '>', 480) // Plus de 8 heures en minutes
+            ->whereNotNull('logout_at')
+            ->where('logout_at', '>=', Carbon::now()->subDay())
+            ->count();
+        
+        if ($longSessions > 0) {
+            $alerts[] = [
+                'severity' => 'info',
+                'title' => 'Sessions prolongées détectées',
+                'message' => "{$longSessions} session(s) ont duré plus de 8 heures dans les dernières 24 heures",
+                'timestamp' => Carbon::now()->format('d/m/Y H:i:s')
+            ];
+        }
+        
+        return $alerts;
+    }
 }

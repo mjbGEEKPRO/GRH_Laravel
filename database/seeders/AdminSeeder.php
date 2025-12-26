@@ -28,7 +28,7 @@ class AdminSeeder extends Seeder
                 'lieu_naissance' => 'bafoussam',
                 'password' => Hash::make('Admin237!'),
                 'statut' => true,
-                'compte' => false,
+                'compte' => true,
                 'role_id' => 4,
                 'telephone' => '674542313'
             ]
